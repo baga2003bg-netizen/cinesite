@@ -1,0 +1,513 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { 
+  LayoutDashboard, ShoppingBag, Package, Receipt, TrendingUp, 
+  Settings, Sun, Moon, Plus, Minus, Trash2, ShoppingCart, 
+  Search, Bell, Menu, X, ArrowUpRight, ArrowDownRight,
+  AlertTriangle, DollarSign, CreditCard, ChevronRight,
+  Sparkles, Bot, Wand2, FileText, CheckCircle2, Info,
+  Upload, Download, FileSpreadsheet, AlertCircle
+} from 'lucide-react';
+
+// --- GEMINI API UTILS ---
+const apiKey = ""; 
+
+const callGemini = async (prompt, systemPrompt = "You are a helpful business assistant for an appliance store.") => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] }
+  };
+  let delay = 1000;
+  for (let i = 0; i < 5; i++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) {
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text;
+      }
+    } catch (e) { if (i === 4) throw e; }
+    await new Promise(resolve => setTimeout(resolve, delay));
+    delay *= 2;
+  }
+  return "AI Service temporarily unavailable.";
+};
+
+// --- DUMMY DATA ---
+const INITIAL_INVENTORY = [
+  { id: '1', name: 'LG OLED 65" TV', category: 'TVs', brand: 'LG', sku: 'LG-OLED65', priceBuy: 1200, priceSell: 1800, stock: 8, minStock: 3, supplier: 'LG Electronics' },
+  { id: '2', name: 'Samsung French Door Fridge', category: 'Refrigerators', brand: 'Samsung', sku: 'SAM-FR-FD', priceBuy: 1500, priceSell: 2200, stock: 4, minStock: 5, supplier: 'Samsung Home' },
+  { id: '3', name: 'Bosch Series 6 Washing Machine', category: 'Washers', brand: 'Bosch', sku: 'BOS-W6', priceBuy: 450, priceSell: 750, stock: 12, minStock: 4, supplier: 'Bosch Global' },
+  { id: '4', name: 'Daikin 1.5 Ton Inverter AC', category: 'Air Conditioners', brand: 'Daikin', sku: 'DAI-AC-1.5', priceBuy: 600, priceSell: 950, stock: 15, minStock: 5, supplier: 'Daikin Ind.' },
+  { id: '5', name: 'Dyson V15 Detect Vacuum', category: 'Small Appliances', brand: 'Dyson', sku: 'DYS-V15', priceBuy: 400, priceSell: 650, stock: 2, minStock: 5, supplier: 'Dyson Direct' },
+];
+
+const INITIAL_EXPENSES = [
+  { id: '1', date: new Date().toISOString(), category: 'Rent', amount: 2000, description: 'Monthly store rent' },
+  { id: '2', date: new Date(Date.now() - 86400000 * 2).toISOString(), category: 'Electricity', amount: 350, description: 'Power bill' },
+];
+
+const INITIAL_SALES = [
+  { 
+    id: '1', 
+    date: new Date(Date.now() - 86400000).toISOString(), 
+    items: [{ id: '1', name: 'LG OLED 65" TV', price: 1800, qty: 1, cost: 1200 }], 
+    subtotal: 1800, discount: 0, total: 1800, paymentMethod: 'Card' 
+  }
+];
+
+// --- UTILS ---
+const formatCurrency = (amount) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+const generateId = () => Math.random().toString(36).substr(2, 9);
+
+// --- MAIN APP ---
+
+export default function App() {
+  const [theme, setTheme] = useState('dark');
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  
+  const [inventory, setInventory] = useState(INITIAL_INVENTORY);
+  const [sales, setSales] = useState(INITIAL_SALES);
+  const [expenses, setExpenses] = useState(INITIAL_EXPENSES);
+  const [cart, setCart] = useState([]);
+  const [discount, setDiscount] = useState(0);
+  const [notifications, setNotifications] = useState([]);
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  const fileInputRef = useRef(null);
+
+  // AI Specific State
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiReport, setAiReport] = useState("");
+
+  // Analytics
+  const totalRevenue = useMemo(() => sales.reduce((sum, sale) => sum + sale.total, 0), [sales]);
+  const totalExpenses = useMemo(() => expenses.reduce((sum, exp) => sum + exp.amount, 0), [expenses]);
+  const inventoryValue = useMemo(() => inventory.reduce((sum, item) => sum + (item.priceBuy * item.stock), 0), [inventory]);
+  const lowStockItems = useMemo(() => inventory.filter(item => item.stock <= item.minStock), [inventory]);
+
+  const addNotification = (title, message, type = 'info') => {
+    const id = generateId();
+    setNotifications(prev => [{ id, title, message, type }, ...prev]);
+    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 5000);
+  };
+
+  // --- HANDLERS ---
+  const handleAddProduct = (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const newProduct = {
+      id: generateId(),
+      name: formData.get('name'),
+      category: formData.get('category'),
+      brand: formData.get('brand'),
+      sku: formData.get('sku') || `SKU-${Date.now()}`,
+      priceBuy: parseFloat(formData.get('priceBuy')),
+      priceSell: parseFloat(formData.get('priceSell')),
+      stock: parseInt(formData.get('stock')),
+      minStock: parseInt(formData.get('minStock')),
+      supplier: formData.get('supplier'),
+    };
+    setInventory([...inventory, newProduct]);
+    addNotification("Product Added", `${newProduct.name} saved.`, "success");
+    e.target.reset();
+  };
+
+  const handleUpdateStock = (id, amount) => {
+    setInventory(prev => prev.map(item => {
+      if (item.id === id) {
+        const newStock = item.stock + amount;
+        if (newStock <= item.minStock) addNotification("Low Stock!", `${item.name} is now low.`, "warning");
+        return { ...item, stock: newStock };
+      }
+      return item;
+    }));
+    addNotification("Stock Updated", "Inventory adjusted.", "success");
+  };
+
+  const handleDeleteProduct = (id) => {
+    if (confirm("Delete this product?")) {
+      setInventory(prev => prev.filter(p => p.id !== id));
+      addNotification("Product Deleted", "Item removed.", "info");
+    }
+  };
+
+  const handleCheckout = (paymentMethod) => {
+    if (cart.length === 0) return;
+    const subtotal = cart.reduce((sum, item) => sum + (item.priceSell * item.qty), 0);
+    const total = subtotal - (subtotal * discount / 100);
+    const newSale = { id: generateId(), date: new Date().toISOString(), items: [...cart], total, paymentMethod };
+
+    setInventory(prev => prev.map(invItem => {
+      const cartItem = cart.find(c => c.id === invItem.id);
+      if (cartItem) {
+        const newStock = invItem.stock - cartItem.qty;
+        if (newStock <= invItem.minStock) addNotification("Low Stock!", `${invItem.name} is low.`, "warning");
+        return { ...invItem, stock: newStock };
+      }
+      return invItem;
+    }));
+
+    setSales(prev => [newSale, ...prev]);
+    setCart([]);
+    addNotification("Sale Complete", "Transaction recorded.", "success");
+  };
+
+  // --- EXCEL/CSV IMPORT FEATURE ---
+  const downloadTemplate = () => {
+    const headers = "Name,Category,Brand,SKU,BuyPrice,SellPrice,Stock,MinStock,Supplier\n";
+    const example = "Example TV,Electronics,LG,SKU001,1000,1500,20,5,LG Global\nExample Fridge,Kitchen,Samsung,SKU002,1200,2000,10,2,Samsung Home";
+    const blob = new Blob([headers + example], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'risestock_inventory_template.csv';
+    a.click();
+    addNotification("Template Ready", "Check your downloads folder.", "info");
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target.result;
+        const rows = text.split('\n').filter(row => row.trim() !== '');
+        if (rows.length < 2) throw new Error("File is empty or missing data.");
+
+        const headers = rows[0].split(',').map(h => h.trim().toLowerCase());
+        
+        const newItems = rows.slice(1).map((row, index) => {
+          const values = row.split(',').map(v => v.trim());
+          const item = {};
+          headers.forEach((header, i) => {
+            item[header] = values[i];
+          });
+
+          // Validation and Mapping
+          return {
+            id: generateId(),
+            name: item.name || `Imported Item ${index + 1}`,
+            category: item.category || 'General',
+            brand: item.brand || 'Unknown',
+            sku: item.sku || `SKU-${Date.now()}-${index}`,
+            priceBuy: parseFloat(item.buyprice) || 0,
+            priceSell: parseFloat(item.sellprice) || 0,
+            stock: parseInt(item.stock) || 0,
+            minStock: parseInt(item.minstock) || 0,
+            supplier: item.supplier || 'N/A'
+          };
+        });
+
+        setInventory(prev => [...prev, ...newItems]);
+        addNotification("Import Successful", `${newItems.length} products imported.`, "success");
+        setShowImportModal(false);
+      } catch (err) {
+        addNotification("Import Failed", "Ensure your CSV format matches the template.", "error");
+        console.error(err);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = null; // Reset input
+  };
+
+  // --- VIEWS ---
+
+  const InventoryView = () => (
+    <div className="space-y-6 animate-in fade-in duration-300">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <h2 className="text-2xl font-bold">Inventory Management</h2>
+        <div className="flex gap-2 w-full md:w-auto">
+          <button 
+            onClick={downloadTemplate}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-xl text-sm font-medium transition-all"
+          >
+            <Download size={18} /> Template
+          </button>
+          <button 
+            onClick={() => setShowImportModal(true)}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium shadow-lg shadow-indigo-500/20 transition-all"
+          >
+            <Upload size={18} /> Import CSV
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="lg:col-span-1 bg-white dark:bg-gray-800 p-6 rounded-2xl border dark:border-gray-700 shadow-sm h-fit">
+          <h3 className="font-bold mb-4">Add Single Product</h3>
+          <form onSubmit={handleAddProduct} className="space-y-4 text-sm">
+            <input required name="name" className="w-full p-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700" placeholder="Product Name" />
+            <div className="grid grid-cols-2 gap-2">
+              <input required name="category" placeholder="Category" className="w-full p-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700" />
+              <input required name="brand" placeholder="Brand" className="w-full p-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <input required type="number" name="priceBuy" placeholder="Buy Price" className="w-full p-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700" />
+              <input required type="number" name="priceSell" placeholder="Sell Price" className="w-full p-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <input required type="number" name="stock" placeholder="Initial Stock" className="w-full p-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700" />
+              <input required type="number" name="minStock" placeholder="Min Alert" className="w-full p-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700" />
+            </div>
+            <button type="submit" className="w-full py-2 bg-indigo-600 text-white rounded-lg font-bold">Save Product</button>
+          </form>
+        </div>
+
+        <div className="lg:col-span-3 bg-white dark:bg-gray-800 rounded-2xl border dark:border-gray-700 overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-gray-50 dark:bg-gray-800/50 text-gray-500 text-sm">
+                  <th className="p-4">Product</th>
+                  <th className="p-4">Pricing</th>
+                  <th className="p-4">Stock</th>
+                  <th className="p-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y dark:divide-gray-700">
+                {inventory.map(item => (
+                  <tr key={item.id} className="text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                    <td className="p-4">
+                      <div className="font-bold">{item.name}</div>
+                      <div className="text-xs text-gray-400">{item.sku} • {item.category}</div>
+                    </td>
+                    <td className="p-4">
+                      <div className="text-indigo-500 font-bold">{formatCurrency(item.priceSell)}</div>
+                      <div className="text-xs text-gray-400">Buy: {formatCurrency(item.priceBuy)}</div>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-3">
+                        <span className={`px-2 py-1 rounded font-bold min-w-[30px] text-center ${item.stock <= item.minStock ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                          {item.stock}
+                        </span>
+                        <div className="flex gap-1">
+                          <button onClick={() => handleUpdateStock(item.id, 1)} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors"><Plus size={14}/></button>
+                          <button 
+                            onClick={() => {
+                              const v = prompt(`Update stock for ${item.name}:`, "10");
+                              if (v && !isNaN(v)) handleUpdateStock(item.id, parseInt(v));
+                            }} 
+                            className="text-[10px] font-bold px-1.5 py-1 uppercase text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded transition-colors"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-4 text-right">
+                      <button onClick={() => handleDeleteProduct(item.id)} className="text-red-400 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"><Trash2 size={18}/></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Import Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-gray-900 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border dark:border-gray-800">
+            <div className="p-6 border-b dark:border-gray-800 flex justify-between items-center">
+              <h3 className="text-xl font-bold flex items-center gap-2"><FileSpreadsheet className="text-indigo-500"/> Bulk Import</h3>
+              <button onClick={() => setShowImportModal(false)} className="text-gray-400 hover:text-gray-600 p-1"><X size={24}/></button>
+            </div>
+            <div className="p-8 text-center">
+              <div className="mb-6 p-8 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-3xl flex flex-col items-center justify-center gap-4 hover:border-indigo-400 transition-colors group">
+                <div className="w-20 h-20 bg-indigo-50 dark:bg-indigo-900/30 rounded-full flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform">
+                  <Upload size={40} />
+                </div>
+                <div>
+                  <p className="font-bold text-gray-700 dark:text-gray-200 text-lg">Click to Upload CSV</p>
+                  <p className="text-sm text-gray-500 mt-1">Excel-compatible format supported</p>
+                </div>
+                <input 
+                  type="file" 
+                  accept=".csv" 
+                  ref={fileInputRef} 
+                  onChange={handleFileUpload}
+                  className="hidden" 
+                />
+                <button 
+                  onClick={() => fileInputRef.current.click()}
+                  className="px-8 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 transition-all"
+                >
+                  Browse Files
+                </button>
+              </div>
+              <div className="flex items-start gap-3 text-left p-4 bg-blue-50 dark:bg-indigo-900/20 rounded-2xl text-blue-800 dark:text-indigo-300 text-xs border border-blue-100 dark:border-indigo-800/50">
+                <Info size={18} className="shrink-0" />
+                <p><strong>Note:</strong> Make sure your file matches the template headers. Invalid rows will be skipped automatically.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const POSView = () => (
+    <div className="h-full flex flex-col lg:flex-row gap-6 animate-in fade-in duration-300">
+      <div className="flex-1 flex flex-col">
+        <div className="mb-4 relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <input className="w-full pl-10 pr-4 py-3 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-2xl" placeholder="Search inventory..." />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 overflow-y-auto pr-2">
+          {inventory.map(p => (
+            <button key={p.id} onClick={() => {
+              if (p.stock <= 0) { addNotification("Out of Stock", `${p.name} is unavailable.`, "error"); return; }
+              setCart(prev => {
+                const ex = prev.find(i => i.id === p.id);
+                if (ex) return prev.map(i => i.id === p.id ? {...i, qty: i.qty + 1} : i);
+                return [...prev, {...p, qty: 1, cost: p.priceBuy}];
+              });
+            }} className="p-4 bg-white dark:bg-gray-800 rounded-2xl border dark:border-gray-700 text-left hover:border-indigo-500 transition-all active:scale-95 group relative">
+              <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">{p.brand}</div>
+              <div className="font-bold text-sm line-clamp-2 h-10 mt-1">{p.name}</div>
+              <div className="mt-4 flex justify-between items-center">
+                <span className="font-black text-lg">{formatCurrency(p.priceSell)}</span>
+                <span className={`text-[10px] px-2 py-1 rounded-full font-bold ${p.stock <= p.minStock ? 'bg-red-100 text-red-600' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>{p.stock} units</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="w-full lg:w-96 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-3xl flex flex-col shadow-xl overflow-hidden h-[600px] lg:h-auto">
+        <div className="p-6 font-bold border-b dark:border-gray-700 flex items-center justify-between">
+          <div className="flex items-center gap-2"><ShoppingCart size={20}/> Checkout</div>
+          {cart.length > 0 && <button onClick={() => setCart([])} className="text-xs text-red-500 font-bold hover:underline">Clear</button>}
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {cart.map(item => (
+            <div key={item.id} className="flex justify-between items-center animate-in slide-in-from-left duration-200">
+              <div className="flex-1">
+                <div className="text-sm font-bold truncate pr-2">{item.name}</div>
+                <div className="text-xs text-gray-400">{formatCurrency(item.priceSell)} x {item.qty}</div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="font-black text-sm">{formatCurrency(item.priceSell * item.qty)}</div>
+                <button onClick={() => setCart(cart.filter(i => i.id !== item.id))} className="text-gray-300 hover:text-red-400 p-1"><X size={16}/></button>
+              </div>
+            </div>
+          ))}
+          {cart.length === 0 && (
+            <div className="h-full flex flex-col items-center justify-center text-gray-400 text-center opacity-30">
+              <ShoppingCart size={48} className="mb-2" />
+              <p>Scan items to begin</p>
+            </div>
+          )}
+        </div>
+        <div className="p-6 bg-gray-50 dark:bg-gray-900 border-t dark:border-gray-700 space-y-4">
+          <div className="flex justify-between text-sm text-gray-500"><span>Items Total</span><span>{formatCurrency(cart.reduce((s,i) => s + (i.priceSell * i.qty), 0))}</span></div>
+          <div className="flex justify-between font-black text-2xl border-t dark:border-gray-800 pt-4"><span>Total</span><span className="text-indigo-600 dark:text-indigo-400">{formatCurrency(cart.reduce((s,i) => s + (i.priceSell * i.qty), 0))}</span></div>
+          <button onClick={() => handleCheckout('Card')} disabled={cart.length === 0} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/30 disabled:opacity-50 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
+            <CreditCard size={20}/> Pay & Print Receipt
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const DashboardView = () => (
+    <div className="space-y-6">
+       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+         <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl border dark:border-gray-700 shadow-sm">
+           <div className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Total Revenue</div>
+           <div className="text-3xl font-black">{formatCurrency(totalRevenue)}</div>
+         </div>
+         <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl border dark:border-gray-700 shadow-sm">
+           <div className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Stock Value</div>
+           <div className="text-3xl font-black">{formatCurrency(inventoryValue)}</div>
+         </div>
+         <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl border dark:border-gray-700 shadow-sm">
+           <div className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Low Stock Alerts</div>
+           <div className={`text-3xl font-black ${lowStockItems.length > 0 ? 'text-red-500' : 'text-green-500'}`}>{lowStockItems.length}</div>
+         </div>
+         <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl border dark:border-gray-700 shadow-sm">
+           <div className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-1">Store Expenses</div>
+           <div className="text-3xl font-black text-red-500">{formatCurrency(totalExpenses)}</div>
+         </div>
+       </div>
+       <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-10 rounded-[2.5rem] text-white relative overflow-hidden group">
+         <div className="relative z-10">
+           <h3 className="text-3xl font-bold mb-3">Welcome back to RiseStock</h3>
+           <p className="opacity-80 max-w-lg text-lg leading-relaxed mb-6">Need to update your catalog? Our <strong>Bulk Import</strong> tool allows you to sync thousands of products in seconds using simple Excel spreadsheets.</p>
+           <button onClick={() => setActiveTab('inventory')} className="px-8 py-3 bg-white text-indigo-600 rounded-2xl font-bold shadow-xl hover:scale-105 transition-transform">Get Started</button>
+         </div>
+         <Sparkles className="absolute right-[-40px] bottom-[-40px] w-96 h-96 opacity-10 rotate-12 group-hover:scale-110 transition-transform duration-1000" />
+       </div>
+    </div>
+  );
+
+  return (
+    <div className={`min-h-screen ${theme === 'dark' ? 'dark bg-gray-950 text-gray-100' : 'bg-gray-50 text-gray-900'} font-sans transition-colors duration-300`}>
+      {/* Notifications Portal */}
+      <div className="fixed top-6 right-6 z-[100] flex flex-col gap-3 w-80">
+        {notifications.map(n => (
+          <div key={n.id} className={`p-5 rounded-2xl shadow-2xl border flex items-start gap-4 animate-in slide-in-from-right duration-300 ${
+            n.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' :
+            n.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-800' :
+            n.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
+            'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-100'
+          }`}>
+            <div className="mt-0.5">
+              {n.type === 'error' ? <AlertCircle size={20}/> : n.type === 'warning' ? <AlertTriangle size={20}/> : <Info size={20}/>}
+            </div>
+            <div className="flex-1">
+              <div className="font-black text-sm">{n.title}</div>
+              <div className="text-xs opacity-80 mt-1 leading-tight">{n.message}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex h-screen overflow-hidden">
+        <aside className="w-72 bg-white dark:bg-gray-900 border-r dark:border-gray-800 flex flex-col hidden md:flex shrink-0">
+          <div className="p-10 text-3xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500">RiseStock</div>
+          <nav className="flex-1 px-6 space-y-3">
+            {[ 
+              { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' }, 
+              { id: 'pos', icon: ShoppingBag, label: 'Store POS' }, 
+              { id: 'inventory', icon: Package, label: 'Inventory' } 
+            ].map(item => (
+              <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all font-bold text-sm ${activeTab === item.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-500/30' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'}`}><item.icon size={20}/>{item.label}</button>
+            ))}
+          </nav>
+          <div className="p-8 border-t dark:border-gray-800 text-xs text-gray-500">Version 2.0 • Bulk Tools Ready</div>
+        </aside>
+
+        <main className="flex-1 flex flex-col overflow-hidden">
+          <header className="h-20 flex items-center justify-between px-10 bg-white/50 dark:bg-gray-900/50 backdrop-blur-md border-b dark:border-gray-800 shrink-0">
+            <div className="font-black text-sm tracking-widest uppercase opacity-40">{activeTab}</div>
+            <div className="flex items-center gap-4">
+               {lowStockItems.length > 0 && (
+                 <div className="px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full text-xs font-black animate-pulse flex items-center gap-2">
+                   <AlertTriangle size={14}/> {lowStockItems.length} Warnings
+                 </div>
+               )}
+               <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="p-3 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-all border dark:border-gray-700">
+                 {theme === 'dark' ? <Sun size={20}/> : <Moon size={20}/>}
+               </button>
+            </div>
+          </header>
+          <div className="flex-1 overflow-y-auto p-6 md:p-10">
+            <div className="max-w-7xl mx-auto h-full">
+              {activeTab === 'dashboard' && <DashboardView />}
+              {activeTab === 'pos' && <POSView />}
+              {activeTab === 'inventory' && <InventoryView />}
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
